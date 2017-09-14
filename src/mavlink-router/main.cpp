@@ -39,6 +39,22 @@
 #define DEFAULT_CONF_DIR "/etc/mavlink-router/config.d"
 #define DEFAULT_RETRY_TCP_TIMEOUT 5
 
+#if defined(ANDROID)
+static const char *__getProgramName () {
+    extern const char *__progname;
+    char * arg = strrchr(__progname, '/');
+    if (arg)
+        return arg+1;
+    else
+        return __progname;
+}
+#define GET_PROGRAM_NAME() __getProgramName()
+#elif  (defined(__GNU_LIBRARY__) || defined(__GLIBC__)) && !defined(__UCLIBC__)
+#define GET_PROGRAM_NAME() program_invocation_short_name
+#else
+#define GET_PROGRAM_NAME() "CMD"
+#endif
+
 static struct options opt = {
         .endpoints = nullptr,
         .conf_file_name = nullptr,
@@ -88,7 +104,7 @@ static void help(FILE *fp) {
             "                               <error|warning|info|debug>\n"
             "  -v --verbose                 Verbose. Same as --debug-log-level=debug"
             "  -h --help                    Print this message\n"
-            , program_invocation_short_name);
+            , GET_PROGRAM_NAME());
 }
 
 static unsigned long find_next_endpoint_port(const char *ip)
@@ -562,7 +578,9 @@ static int parse_log_level(const char *val, size_t val_len, void *storage, size_
     if (val_len > MAX_LOG_LEVEL_SIZE)
         return -EINVAL;
 
-    const char *log_level = strndupa(val, val_len);
+//    const char *log_level = strndupa(val, val_len);
+    char log_level[MAX_LOG_LEVEL_SIZE+1];
+    strncpy(log_level, val, val_len);
     int lvl = log_level_from_str(log_level);
     if (lvl == -EINVAL) {
         log_error("Invalid argument for DebugLogLevel = %s", log_level);

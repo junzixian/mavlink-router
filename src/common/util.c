@@ -118,9 +118,14 @@ static inline int is_dir(const char *path)
 
 int mkdir_p(const char *path, int len, mode_t mode)
 {
-    char *start, *end;
+    char *end;
+    char start[PATH_MAX+1];
 
-    start = strndupa(path, len);
+    if(len > PATH_MAX) {
+        return -ENOTDIR;
+    }
+    strncpy(start, path, len);
+//    start = strndup(path, len);
     end = start + len;
 
     /*

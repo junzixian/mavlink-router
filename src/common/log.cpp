@@ -31,6 +31,10 @@
 #define COLOR_WHITE        "\033[37;1m"
 #define COLOR_RESET        "\033[0m"
 
+#ifndef LINE_MAX
+#define LINE_MAX 128
+#endif
+
 Log::Level Log::_max_level = Level::INFO;
 int Log::_target_fd = -1;
 bool Log::_show_colors;
