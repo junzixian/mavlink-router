@@ -50,11 +50,27 @@ protected:
     static bool _show_colors;
 };
 
+#if defined(ANDROID)
+#include <cutils/log.h>
+#undef LOG_TAG
+#define LOG_TAG "mavlink-router"
+#define log_debug(fmt, args...)                          \
+    do {                                                 \
+        if (Log::get_max_level() >= Log::Level::DEBUG) { \
+            ALOG(LOG_DEBUG, LOG_TAG, fmt, ## args );     \
+        }                                                \
+    } while(0)
+
+#define log_info(fmt, args...)    ALOG(LOG_INFO, LOG_TAG, fmt, ## args )
+#define log_warning(fmt, args...) ALOG(LOG_WARN, LOG_TAG, fmt, ## args )
+#define log_error(fmt, args...)   ALOG(LOG_ERROR, LOG_TAG, fmt, ## args )
+#else
 #define log_debug(...) Log::log(Log::Level::DEBUG, __VA_ARGS__)
 #define log_info(...) Log::log(Log::Level::INFO, __VA_ARGS__)
 #define log_notice(...) Log::log(Log::Level::NOTICE, __VA_ARGS__)
 #define log_warning(...) Log::log(Log::Level::WARNING, __VA_ARGS__)
 #define log_error(...) Log::log(Log::Level::ERROR, __VA_ARGS__)
+#endif
 
 #define assert_or_return(exp, ...)                              \
     do {                                                        \

@@ -72,9 +72,18 @@ int Endpoint::handle_read()
     uint8_t src_sysid, src_compid;
     struct buffer buf{};
 
-    while ((r = read_msg(&buf, &target_sysid, &target_compid, &src_sysid, &src_compid)) > 0)
-        Mainloop::get_instance().route_msg(&buf, target_sysid, target_compid, src_sysid,
-                                           src_compid);
+    do {
+        uint64_t now_msec = now_usec() / USEC_PER_MSEC;
+        r = read_msg(&buf, &target_sysid, &target_compid, &src_sysid, &src_compid);
+        uint64_t duration = now_usec() / USEC_PER_MSEC - now_msec;
+        if (duration > 3) {
+            log_warning("[%s] reading may block mainloop: [%lums]", get_name(), duration);
+        }
+        if (r > 0) {
+            Mainloop::get_instance().route_msg(&buf, target_sysid, target_compid, src_sysid,
+                                               src_compid);
+        }
+    } while(r > 0);
 
     return r;
 }

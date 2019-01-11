@@ -119,8 +119,14 @@ int Mainloop::remove_fd(int fd)
 
 int Mainloop::write_msg(Endpoint *e, const struct buffer *buf)
 {
+    uint64_t now_msec = now_usec() / USEC_PER_MSEC;
+
     int r = e->write_msg(buf);
 
+    uint64_t duration = now_usec() / USEC_PER_MSEC - now_msec;
+    if (duration > 3) {
+        log_warning("[%s] writing may block mainloop: [%lums]", e->get_name(), duration);
+    }
     /*
      * If endpoint would block, add EPOLLOUT event to get notified when it's
      * possible to write again

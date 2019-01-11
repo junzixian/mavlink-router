@@ -16,11 +16,8 @@ LOCAL_SRC_FILES:= \
         src/common/util.c \
         src/common/xtermios.cpp \
 
-#LOCAL_SHARED_LIBRARIES := \
-        libcutils \
+LOCAL_SHARED_LIBRARIES := \
         liblog \
-        libutils \
-        libbinder
 
 LOCAL_C_INCLUDES += \
         $(LOCAL_PATH)/src \

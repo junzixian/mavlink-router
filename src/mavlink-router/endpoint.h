@@ -97,6 +97,7 @@ public:
     }
 
     bool accept_msg(int target_sysid, int target_compid, uint8_t src_sysid, uint8_t src_compid);
+    const char* get_name() { return (_name == nullptr) ? "NONAME" : _name; };
 
     struct buffer rx_buf;
     struct buffer tx_buf;
