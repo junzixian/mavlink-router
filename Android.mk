@@ -21,8 +21,8 @@ LOCAL_SHARED_LIBRARIES := \
 
 LOCAL_C_INCLUDES += \
         $(LOCAL_PATH)/src \
-        $(LOCAL_PATH)/include/mavlink \
-        $(LOCAL_PATH)/include/mavlink/ardupilotmega \
+        $(LOCAL_PATH)/../common/include/mavlink \
+        $(LOCAL_PATH)/../common/include/mavlink/ardupilotmega \
 
 LOCAL_MODULE:= mavlink-router
 
