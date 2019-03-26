@@ -29,6 +29,7 @@
 #include <common/util.h>
 
 #include "autolog.h"
+#include "serialendpoint.h"
 
 static volatile bool should_exit = false;
 
@@ -374,7 +375,7 @@ bool Mainloop::add_endpoints(Mainloop &mainloop, struct options *opt)
     for (conf = opt->endpoints; conf; conf = conf->next) {
         switch (conf->type) {
         case Uart: {
-            std::unique_ptr<UartEndpoint> uart{new UartEndpoint{conf->name}};
+            std::unique_ptr<SerialEndpoint> uart{new SerialEndpoint{conf->name}};
             if (uart->open(conf->device) < 0)
                 return false;
 

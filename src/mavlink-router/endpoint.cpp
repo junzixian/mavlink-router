@@ -238,7 +238,7 @@ int Endpoint::read_msg(struct buffer *pbuf, int *target_sysid, int *target_compi
         if (!_check_crc(msg_entry)) {
             _stat.read.crc_error++;
             _stat.read.crc_error_bytes += expected_size;
-            return 0;
+            return CrcErrorMsg;
         }
     }
 

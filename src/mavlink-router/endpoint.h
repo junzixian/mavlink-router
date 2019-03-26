@@ -72,6 +72,7 @@ public:
      * Success returns for @read_msg()
      */
     enum read_msg_result {
+        CrcErrorMsg = -1,
         ReadOk = 1,
         ReadUnkownMsg,
     };
