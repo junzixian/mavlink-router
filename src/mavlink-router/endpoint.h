@@ -21,6 +21,7 @@
 
 #include <memory>
 #include <vector>
+#include <sys/un.h>
 
 #include "comm.h"
 #include "pollable.h"
@@ -162,14 +163,18 @@ private:
 class UdpEndpoint : public Endpoint {
 public:
     UdpEndpoint();
-    virtual ~UdpEndpoint() { }
+    ~UdpEndpoint();
 
     int write_msg(const struct buffer *pbuf) override;
     int flush_pending_msgs() override { return -ENOSYS; }
 
     int open(const char *ip, unsigned long port, bool bind = false);
+    void close();
 
     struct sockaddr_in sockaddr;
+
+    char *_ip = nullptr;
+    unsigned long _port = 0;
 
 protected:
     ssize_t _read_msg(uint8_t *buf, size_t len) override;
@@ -207,4 +212,21 @@ private:
     char *_ip = nullptr;
     unsigned long _port = 0;
     bool _valid = true;
+};
+
+class LocalEndpoint : public Endpoint {
+public:
+    LocalEndpoint();
+    ~LocalEndpoint() { }
+
+    int write_msg(const struct buffer *pbuf) override;
+    int flush_pending_msgs() override { return -ENOSYS; }
+
+    int open(const char* sock_name, bool bind = false);
+
+    struct sockaddr_un sockaddr;
+    socklen_t sockaddr_len;
+
+protected:
+    ssize_t _read_msg(uint8_t *buf, size_t len) override;
 };

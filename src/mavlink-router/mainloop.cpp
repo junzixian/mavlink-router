@@ -163,6 +163,15 @@ void Mainloop::route_msg(struct buffer *buf, int target_sysid, int target_compid
         }
     }
 
+    for (struct udp_endpoint_entry *e = g_udp_endpoints; e; e = e->next) {
+        if (e->endpoint->accept_msg(target_sysid, target_compid, sender_sysid, sender_compid)) {
+            log_debug("Endpoint [%d] accepted message to %d/%d from %u/%u", e->endpoint->fd,
+                      target_sysid, target_compid, sender_sysid, sender_compid);
+            write_msg(e->endpoint, buf);
+            unknown = false;
+        }
+    }
+
     if (unknown) {
         _errors_aggregate.msg_to_unknown++;
         log_debug("Message to unknown sysid/compid: %u/%u", target_sysid, target_compid);
@@ -253,6 +262,45 @@ accept_error:
     delete tcp;
 }
 
+bool Mainloop::add_udp_endpoint(UdpEndpoint *udp)
+{
+    struct udp_endpoint_entry *udp_entry;
+
+    udp_entry = (struct udp_endpoint_entry *)calloc(1, sizeof(struct udp_endpoint_entry));
+    if (!udp_entry)
+        return false;
+
+    udp_entry->next = g_udp_endpoints;
+    udp_entry->endpoint = udp;
+    g_udp_endpoints = udp_entry;
+
+    add_fd(udp->fd, udp, EPOLLIN);
+
+    return true;
+}
+
+bool Mainloop::remove_udp_endpoint(const char *ip, unsigned long port)
+{
+    for (auto *t = g_udp_endpoints; t; t = t->next) {
+        if (!strcmp(t->endpoint->_ip, ip) && (t->endpoint->_port == port)) {
+            remove_fd(t->endpoint->fd);
+            t->endpoint->close();
+            if (t->next != nullptr) {
+                auto *r = t->next;
+                delete t->endpoint;
+                t->endpoint = t->next->endpoint;
+                t->next = t->next->next;
+                free(r);
+            } else {
+                delete t->endpoint;
+                free(t);
+                g_udp_endpoints = nullptr;
+            }
+        }
+    }
+    return true;
+}
+
 void Mainloop::loop()
 {
     const int max_events = 8;
@@ -333,6 +381,10 @@ bool Mainloop::_log_aggregate_timeout(void *data)
     for (auto *t = g_tcp_endpoints; t; t = t->next) {
         t->endpoint->log_aggregate(LOG_AGGREGATE_INTERVAL_SEC);
     }
+
+    for (auto *t = g_udp_endpoints; t; t = t->next) {
+        t->endpoint->log_aggregate(LOG_AGGREGATE_INTERVAL_SEC);
+    }
     return true;
 }
 
@@ -342,6 +394,9 @@ void Mainloop::print_statistics()
         (*e)->print_statistics();
 
     for (auto *t = g_tcp_endpoints; t; t = t->next)
+        t->endpoint->print_statistics();
+
+    for (auto *t = g_udp_endpoints; t; t = t->next)
         t->endpoint->print_statistics();
 }
 
@@ -426,6 +481,18 @@ bool Mainloop::add_endpoints(Mainloop &mainloop, struct options *opt)
             tcp.release();
             break;
         }
+        case Local: {
+            std::unique_ptr<LocalEndpoint> local{new LocalEndpoint{}};
+            if (local->open(conf->sockname, conf->binding) < 0) {
+                log_error("Could not open %s", conf->sockname);
+                return false;
+            }
+
+            g_endpoints[i] = local.release();
+            mainloop.add_fd(g_endpoints[i]->fd, g_endpoints[i], EPOLLIN);
+            i++;
+            break;
+        }
         default:
             log_error("Unknow endpoint type!");
             return false;
@@ -447,7 +514,7 @@ bool Mainloop::add_endpoints(Mainloop &mainloop, struct options *opt)
     }
 
     if (opt->report_msg_statistics)
-        add_timeout(MSEC_PER_SEC, _print_statistics_timeout_cb, this);
+        add_timeout(MSEC_PER_SEC * 10, _print_statistics_timeout_cb, this);
 
     return true;
 }
@@ -470,7 +537,9 @@ void Mainloop::free_endpoints(struct options *opt)
         auto next = e->next;
         if (e->type == Udp || e->type == Tcp) {
             free(e->address);
-        } else {
+        } else if (e->type == Local) {
+            free(e->sockname);
+        } else if (e->type == Uart) {
             free(e->device);
             delete e->bauds;
         }

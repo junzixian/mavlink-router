@@ -32,10 +32,11 @@
 #include "comm.h"
 #include "endpoint.h"
 #include "mainloop.h"
+#include "controller.h"
 
 #define MAVLINK_TCP_PORT 5760
 #define DEFAULT_BAUDRATE 115200U
-#define DEFAULT_CONFFILE "/etc/mavlink-router/main.conf"
+#define DEFAULT_CONFFILE "/system/etc/mavlink-router.conf"
 #define DEFAULT_CONF_DIR "/etc/mavlink-router/config.d"
 #define DEFAULT_RETRY_TCP_TIMEOUT 5
 
@@ -273,6 +274,44 @@ fail:
     return ret;
 }
 
+static int add_local_endpoint(const char *name, size_t name_len, const char *sockname,
+                              bool binding)
+{
+    int ret;
+
+    struct endpoint_config *conf
+        = (struct endpoint_config *)calloc(1, sizeof(struct endpoint_config));
+    assert_or_return(conf, -ENOMEM);
+    conf->type = Local;
+
+    if (!conf->name && name) {
+        conf->name = strndup(name, name_len);
+        if (!conf->name) {
+            ret = -ENOMEM;
+            goto fail;
+        }
+    }
+
+    conf->sockname = strdup(sockname);
+    if (!conf->sockname) {
+        ret = -ENOMEM;
+        goto fail;
+    }
+
+    conf->binding = binding;
+
+    conf->next = opt.endpoints;
+    opt.endpoints = conf;
+
+    return 0;
+
+fail:
+    free(conf->sockname);
+    free(conf->name);
+    free(conf);
+
+    return ret;
+}
 static std::vector<unsigned long> *strlist_to_ul(const char *list,
                                                  const char *listname,
                                                  const char *delim,
@@ -664,6 +703,14 @@ static int parse_confs(ConfFile &conf)
         {"RetryTimeout",    false,  ConfFile::parse_i,          OPTIONS_TABLE_STRUCT_FIELD(option_tcp, timeout)},
     };
 
+    struct option_local {
+        char *sockname;
+        bool binding;
+    };
+    static const ConfFile::OptionsTable option_table_local[] = {
+        {"SockName",     true,   ConfFile::parse_str_dup,    OPTIONS_TABLE_STRUCT_FIELD(option_local, sockname)},
+        {"binding",      true,   ConfFile::parse_bool,       OPTIONS_TABLE_STRUCT_FIELD(option_local, binding)},
+    };
     ret = conf.extract_options("General", option_table, ARRAY_SIZE(option_table), &opt);
     if (ret < 0)
         return ret;
@@ -717,6 +764,22 @@ static int parse_confs(ConfFile &conf)
                                            opt_tcp.port, opt_tcp.timeout);
         }
         free(opt_tcp.addr);
+        if (ret < 0)
+            return ret;
+    }
+
+    iter = {};
+    pattern = "localendpoint *";
+    offset = strlen(pattern) - 1;
+    while (conf.get_sections(pattern, &iter) == 0) {
+        struct option_local opt_local = {nullptr, true};
+        ret = conf.extract_options(&iter, option_table_local, ARRAY_SIZE(option_table_local), &opt_local);
+        if (ret == 0) {
+            ret = add_local_endpoint(iter.name + offset, iter.name_len - offset, opt_local.sockname,
+                                       opt_local.binding);
+        }
+
+        free(opt_local.sockname);
         if (ret < 0)
             return ret;
     }
@@ -824,10 +887,12 @@ int main(int argc, char *argv[])
         goto close_log;
 
     if (opt.tcp_port == ULONG_MAX)
-        opt.tcp_port = MAVLINK_TCP_PORT;
+        opt.tcp_port = 0; //MAVLINK_TCP_PORT;
 
     if (!mainloop.add_endpoints(mainloop, &opt))
         goto endpoint_error;
+
+    Controller::open();
 
     mainloop.loop();
 

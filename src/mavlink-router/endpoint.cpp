@@ -383,19 +383,19 @@ void Endpoint::print_statistics()
 {
     const uint32_t read_total = _stat.read.total == 0 ? 1 : _stat.read.total;
 
-    printf("Endpoint %s [%d] {", _name, fd);
-    printf("\n\tReceived messages {");
-    printf("\n\t\tCRC error: %u %u%% %luKBytes", _stat.read.crc_error,
+    log_info("Endpoint %s [%d] {", _name, fd);
+    log_info("\n\tReceived messages {");
+    log_info("\n\t\tCRC error: %u %u%% %luKBytes", _stat.read.crc_error,
            (_stat.read.crc_error * 100) / read_total, _stat.read.crc_error_bytes / 1000);
-    printf("\n\t\tSequence lost: %u %u%%", _stat.read.drop_seq_total,
+    log_info("\n\t\tSequence lost: %u %u%%", _stat.read.drop_seq_total,
            (_stat.read.drop_seq_total * 100) / read_total);
-    printf("\n\t\tHandled: %u %luKBytes", _stat.read.handled, _stat.read.handled_bytes / 1000);
-    printf("\n\t\tTotal: %u", _stat.read.total);
-    printf("\n\t}");
-    printf("\n\tTransmitted messages {");
-    printf("\n\t\tTotal: %u %luKBytes", _stat.write.total, _stat.write.bytes / 1000);
-    printf("\n\t}");
-    printf("\n}\n");
+    log_info("\n\t\tHandled: %u %luKBytes", _stat.read.handled, _stat.read.handled_bytes / 1000);
+    log_info("\n\t\tTotal: %u", _stat.read.total);
+    log_info("\n\t}");
+    log_info("\n\tTransmitted messages {");
+    log_info("\n\t\tTotal: %u %luKBytes", _stat.write.total, _stat.write.bytes / 1000);
+    log_info("\n\t}");
+    log_info("\n}\n");
 }
 
 uint8_t Endpoint::get_trimmed_zeros(const mavlink_msg_entry_t *msg_entry, const struct buffer *buffer)
@@ -655,9 +655,25 @@ UdpEndpoint::UdpEndpoint()
     bzero(&sockaddr, sizeof(sockaddr));
 }
 
+UdpEndpoint::~UdpEndpoint()
+{
+    close();
+    free(_ip);
+    _ip = nullptr;
+}
+
 int UdpEndpoint::open(const char *ip, unsigned long port, bool to_bind)
 {
     const int broadcast_val = 1;
+
+    if (!_ip || strcmp(ip, _ip)) {
+        free(_ip);
+        _ip = strdup(ip);
+        _port = port;
+    }
+
+    assert_or_return(_ip, -ENOMEM);
+
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd == -1) {
         log_error("Could not create socket (%m)");
@@ -697,6 +713,16 @@ fail:
         fd = -1;
     }
     return -1;
+}
+
+void UdpEndpoint::close()
+{
+    if (fd > -1) {
+        ::close(fd);
+        log_info("UDP connection closed [%d]", fd);
+    }
+
+    fd = -1;
 }
 
 ssize_t UdpEndpoint::_read_msg(uint8_t *buf, size_t len)
@@ -882,4 +908,100 @@ void TcpEndpoint::close()
     }
 
     fd = -1;
+}
+
+LocalEndpoint::LocalEndpoint()
+    : Endpoint{"LOCAL", false}
+{
+    bzero(&sockaddr, sizeof(sockaddr));
+}
+
+int LocalEndpoint::open(const char *sock_name, bool to_bind)
+{
+    int flags = 0;
+    fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+    if (fd == -1) {
+        log_error("Could not create socket (%m)");
+        return -1;
+    }
+
+    sockaddr.sun_family = AF_UNIX;
+    sockaddr.sun_path[0] = 0;
+    strcpy(sockaddr.sun_path+1, sock_name);
+    sockaddr_len = strlen(sock_name) + offsetof(struct sockaddr_un, sun_path) + 1;
+
+    if (to_bind) {
+        if (bind(fd, (struct sockaddr *) &sockaddr, sockaddr_len)) {
+            log_error("Error binding socket to %s (%m)", sock_name);
+            goto fail;
+        }
+    }
+
+    if ((flags = fcntl(fd, F_GETFL, 0) == -1)) {
+        log_error("controller: Error getfl for fd");
+        goto fail;
+    }
+    if (fcntl(fd, F_SETFL, O_NONBLOCK | flags) < 0) {
+        log_error("controller: Error setting socket fd as non-blocking");
+        goto fail;
+    }
+    if (to_bind)
+        sockaddr_len = 0;
+    log_info("Open LOCAL [%d] %s %c", fd, sock_name, to_bind ? '*' : ' ');
+
+    return fd;
+
+fail:
+    if (fd >= 0) {
+        ::close(fd);
+        fd = -1;
+    }
+    return -1;
+}
+
+ssize_t LocalEndpoint::_read_msg(uint8_t *buf, size_t len)
+{
+    sockaddr_len = sizeof(sockaddr);
+    ssize_t r = ::recvfrom(fd, buf, len, 0,
+                           (struct sockaddr *)&sockaddr, &sockaddr_len);
+    if (r == -1 && errno == EAGAIN)
+        return 0;
+    if (r == -1)
+        return -errno;
+
+    return r;
+}
+
+int LocalEndpoint::write_msg(const struct buffer *pbuf)
+{
+    if (fd < 0) {
+        log_error("Trying to write invalid fd");
+        return -EINVAL;
+    }
+
+    if (sockaddr_len == 0) {
+        log_debug("No one ever connected to %d. No one to write for", fd);
+        return 0;
+    }
+
+    ssize_t r = ::sendto(fd, pbuf->data, pbuf->len, 0,
+                         (struct sockaddr *)&sockaddr, sockaddr_len);
+    if (r == -1) {
+        if (errno != EAGAIN && errno != ECONNREFUSED && errno != ENETUNREACH)
+            log_error("Error sending datagram packet (%m)");
+        return -errno;
+    };
+
+    _stat.write.total++;
+    _stat.write.bytes += pbuf->len;
+
+    /* Incomplete packet, we warn and discard the rest */
+    if (r != (ssize_t) pbuf->len) {
+        _incomplete_msgs++;
+        log_debug("Discarding datagram packet, incomplete write %zd but len=%u", r, pbuf->len);
+    }
+
+    log_debug("LOCAL: [%d] wrote %zd bytes", fd, r);
+
+    return r;
 }

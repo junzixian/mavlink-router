@@ -28,6 +28,11 @@ struct endpoint_entry {
     TcpEndpoint *endpoint;
 };
 
+struct udp_endpoint_entry {
+    struct udp_endpoint_entry *next;
+    UdpEndpoint *endpoint;
+};
+
 class Mainloop {
 public:
     int open();
@@ -48,6 +53,8 @@ public:
     void free_endpoints(struct options *opt);
     bool add_endpoints(Mainloop &mainloop, struct options *opt);
 
+    bool add_udp_endpoint(UdpEndpoint *udp);
+    bool remove_udp_endpoint(const char *ip, unsigned long port);
     void print_statistics();
 
     int epollfd = -1;
@@ -72,6 +79,7 @@ private:
     static const unsigned int LOG_AGGREGATE_INTERVAL_SEC = 5;
 
     endpoint_entry *g_tcp_endpoints = nullptr;
+    udp_endpoint_entry *g_udp_endpoints = nullptr;
     Endpoint **g_endpoints = nullptr;
     int g_tcp_fd = -1;
     LogEndpoint *_log_endpoint = nullptr;
@@ -97,7 +105,7 @@ private:
     static bool _initialized;
 };
 
-enum endpoint_type { Tcp, Uart, Udp, Unknown };
+enum endpoint_type { Tcp, Uart, Udp, Local, Unknown };
 enum mavlink_dialect { Auto, Common, Ardupilotmega };
 
 struct endpoint_config {
@@ -115,6 +123,10 @@ struct endpoint_config {
             char *device;
             std::vector<unsigned long> *bauds;
             bool flowcontrol;
+        };
+        struct {
+            char* sockname;
+            bool binding;
         };
     };
 };
