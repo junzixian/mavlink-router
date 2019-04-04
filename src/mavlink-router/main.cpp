@@ -32,7 +32,6 @@
 #include "comm.h"
 #include "endpoint.h"
 #include "mainloop.h"
-#include "controller.h"
 
 #define MAVLINK_TCP_PORT 5760
 #define DEFAULT_BAUDRATE 115200U
@@ -891,8 +890,6 @@ int main(int argc, char *argv[])
 
     if (!mainloop.add_endpoints(mainloop, &opt))
         goto endpoint_error;
-
-    Controller::open();
 
     mainloop.loop();
 

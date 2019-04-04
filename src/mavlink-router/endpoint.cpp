@@ -52,6 +52,12 @@ Endpoint::Endpoint(const char *name, bool crc_check_enabled)
 
     assert(rx_buf.data);
     assert(tx_buf.data);
+    if (name != nullptr) {
+        char* p = strchr(name, ':');
+        if (p != nullptr) {
+            safe_atoi(p+1, &_group);
+        }
+    }
 }
 
 Endpoint::~Endpoint()
@@ -77,11 +83,11 @@ int Endpoint::handle_read()
         r = read_msg(&buf, &target_sysid, &target_compid, &src_sysid, &src_compid);
         uint64_t duration = now_usec() / USEC_PER_MSEC - now_msec;
         if (duration > 3) {
-            log_warning("[%s] reading may block mainloop: [%lums]", get_name(), duration);
+            log_warning("[%s] reading may block mainloop: [%lums]", name(), duration);
         }
         if (r > 0) {
             Mainloop::get_instance().route_msg(&buf, target_sysid, target_compid, src_sysid,
-                                               src_compid);
+                                               src_compid, this);
         }
     } while(r > 0);
 
@@ -318,15 +324,25 @@ bool Endpoint::has_sys_comp_id(unsigned sys_comp_id)
 }
 
 bool Endpoint::accept_msg(int target_sysid, int target_compid, uint8_t src_sysid,
-                          uint8_t src_compid)
+                          uint8_t src_compid, Endpoint* src_endpoint)
 {
     if (Log::get_max_level() >= Log::Level::DEBUG) {
-        log_debug("Endpoint [%d] got message to %d/%d from %u/%u", fd, target_sysid, target_compid,
-                  src_sysid, src_compid);
+        log_debug("Endpoint [%s][%d] got message to %d/%d from [%s]%u/%u", name(), fd, target_sysid, target_compid,
+                  (src_endpoint == nullptr) ? "NONAME" : src_endpoint->name(), src_sysid, src_compid);
         log_debug("\tKnown endpoints:");
         for (auto it = _sys_comp_ids.begin(); it != _sys_comp_ids.end(); it++) {
             log_debug("\t\t%u/%u", (*it >> 8), *it & 0xff);
         }
+    }
+
+    // message will not route to sender itself
+    if(src_endpoint == this ) {
+        return false;
+    }
+
+    // message will not route to endpoint in same group
+    if((_group >= 0) && (src_endpoint != nullptr) && (src_endpoint->group() == _group)) {
+        return false;
     }
 
     // This endpoint sent the message, and there's no other sys_comp_id: reject msg
@@ -347,6 +363,16 @@ bool Endpoint::accept_msg(int target_sysid, int target_compid, uint8_t src_sysid
 
     // Reject everything else
     return false;
+}
+
+const char* Endpoint::name()
+{
+    return (_name == nullptr) ? "NONAME" : _name;
+}
+
+int Endpoint::group()
+{
+    return _group;
 }
 
 bool Endpoint::_check_crc(const mavlink_msg_entry_t *msg_entry)
@@ -649,31 +675,15 @@ int UartEndpoint::add_speeds(std::vector<unsigned long> bauds)
     return 0;
 }
 
-UdpEndpoint::UdpEndpoint()
-    : Endpoint{"UDP", false}
+UdpEndpoint::UdpEndpoint(const char* name)
+    : Endpoint{name, false}
 {
     bzero(&sockaddr, sizeof(sockaddr));
-}
-
-UdpEndpoint::~UdpEndpoint()
-{
-    close();
-    free(_ip);
-    _ip = nullptr;
 }
 
 int UdpEndpoint::open(const char *ip, unsigned long port, bool to_bind)
 {
     const int broadcast_val = 1;
-
-    if (!_ip || strcmp(ip, _ip)) {
-        free(_ip);
-        _ip = strdup(ip);
-        _port = port;
-    }
-
-    assert_or_return(_ip, -ENOMEM);
-
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd == -1) {
         log_error("Could not create socket (%m)");
@@ -713,16 +723,6 @@ fail:
         fd = -1;
     }
     return -1;
-}
-
-void UdpEndpoint::close()
-{
-    if (fd > -1) {
-        ::close(fd);
-        log_info("UDP connection closed [%d]", fd);
-    }
-
-    fd = -1;
 }
 
 ssize_t UdpEndpoint::_read_msg(uint8_t *buf, size_t len)
@@ -777,8 +777,8 @@ int UdpEndpoint::write_msg(const struct buffer *pbuf)
     return r;
 }
 
-TcpEndpoint::TcpEndpoint()
-    : Endpoint{"TCP", false}
+TcpEndpoint::TcpEndpoint(const char* name)
+    : Endpoint{name, false}
 {
     bzero(&sockaddr, sizeof(sockaddr));
 }
@@ -910,8 +910,8 @@ void TcpEndpoint::close()
     fd = -1;
 }
 
-LocalEndpoint::LocalEndpoint()
-    : Endpoint{"LOCAL", false}
+LocalEndpoint::LocalEndpoint(const char *name)
+    : Endpoint{name, false}
 {
     bzero(&sockaddr, sizeof(sockaddr));
 }
@@ -961,9 +961,14 @@ fail:
 
 ssize_t LocalEndpoint::_read_msg(uint8_t *buf, size_t len)
 {
-    sockaddr_len = sizeof(sockaddr);
-    ssize_t r = ::recvfrom(fd, buf, len, 0,
-                           (struct sockaddr *)&sockaddr, &sockaddr_len);
+    struct sockaddr* pSockaddr = nullptr;
+    socklen_t * pLen = nullptr;
+    if(sockaddr_len == 0) {
+        sockaddr_len = sizeof(sockaddr);
+        pSockaddr = (struct sockaddr*)&sockaddr;
+        pLen = &sockaddr_len;
+    }
+    ssize_t r = ::recvfrom(fd, buf, len, 0, pSockaddr, pLen);
     if (r == -1 && errno == EAGAIN)
         return 0;
     if (r == -1)

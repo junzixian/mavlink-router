@@ -97,8 +97,9 @@ public:
         return has_sys_comp_id(sys_comp_id);
     }
 
-    bool accept_msg(int target_sysid, int target_compid, uint8_t src_sysid, uint8_t src_compid);
-    const char* get_name() { return (_name == nullptr) ? "NONAME" : _name; };
+    bool accept_msg(int target_sysid, int target_compid, uint8_t src_sysid, uint8_t src_compid, Endpoint* src_endpoint);
+    const char* name();
+    int group();
 
     struct buffer rx_buf;
     struct buffer tx_buf;
@@ -130,6 +131,7 @@ protected:
         } write;
     } _stat;
 
+    int _group = -1;
     const bool _crc_check_enabled;
     uint32_t _incomplete_msgs = 0;
     std::vector<uint16_t> _sys_comp_ids;
@@ -137,7 +139,7 @@ protected:
 
 class UartEndpoint : public Endpoint {
 public:
-    UartEndpoint() : Endpoint{"UART", true} { }
+    UartEndpoint(const char *name) : Endpoint{name, true} { }
     virtual ~UartEndpoint();
     int write_msg(const struct buffer *pbuf) override;
     int flush_pending_msgs() override { return -ENOSYS; }
@@ -162,19 +164,15 @@ private:
 
 class UdpEndpoint : public Endpoint {
 public:
-    UdpEndpoint();
-    ~UdpEndpoint();
+    UdpEndpoint(const char *name);
+    virtual ~UdpEndpoint() { }
 
     int write_msg(const struct buffer *pbuf) override;
     int flush_pending_msgs() override { return -ENOSYS; }
 
     int open(const char *ip, unsigned long port, bool bind = false);
-    void close();
 
     struct sockaddr_in sockaddr;
-
-    char *_ip = nullptr;
-    unsigned long _port = 0;
 
 protected:
     ssize_t _read_msg(uint8_t *buf, size_t len) override;
@@ -182,7 +180,7 @@ protected:
 
 class TcpEndpoint : public Endpoint {
 public:
-    TcpEndpoint();
+    TcpEndpoint(const char *name);
     ~TcpEndpoint();
 
     int accept(int listener_fd);
@@ -216,7 +214,7 @@ private:
 
 class LocalEndpoint : public Endpoint {
 public:
-    LocalEndpoint();
+    LocalEndpoint(const char *name);
     ~LocalEndpoint() { }
 
     int write_msg(const struct buffer *pbuf) override;

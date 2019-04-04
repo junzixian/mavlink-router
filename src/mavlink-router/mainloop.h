@@ -28,11 +28,6 @@ struct endpoint_entry {
     TcpEndpoint *endpoint;
 };
 
-struct udp_endpoint_entry {
-    struct udp_endpoint_entry *next;
-    UdpEndpoint *endpoint;
-};
-
 class Mainloop {
 public:
     int open();
@@ -41,7 +36,7 @@ public:
     int remove_fd(int fd);
     void loop();
     void route_msg(struct buffer *buf, int target_sysid, int target_compid, int sender_sysid,
-                   int sender_compid);
+                   int sender_compid, Endpoint* src_endpoint);
     void handle_read(Endpoint *e);
     void handle_canwrite(Endpoint *e);
     void handle_tcp_connection();
@@ -53,8 +48,6 @@ public:
     void free_endpoints(struct options *opt);
     bool add_endpoints(Mainloop &mainloop, struct options *opt);
 
-    bool add_udp_endpoint(UdpEndpoint *udp);
-    bool remove_udp_endpoint(const char *ip, unsigned long port);
     void print_statistics();
 
     int epollfd = -1;
@@ -79,7 +72,6 @@ private:
     static const unsigned int LOG_AGGREGATE_INTERVAL_SEC = 5;
 
     endpoint_entry *g_tcp_endpoints = nullptr;
-    udp_endpoint_entry *g_udp_endpoints = nullptr;
     Endpoint **g_endpoints = nullptr;
     int g_tcp_fd = -1;
     LogEndpoint *_log_endpoint = nullptr;

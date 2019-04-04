@@ -125,7 +125,7 @@ int Mainloop::write_msg(Endpoint *e, const struct buffer *buf)
 
     uint64_t duration = now_usec() / USEC_PER_MSEC - now_msec;
     if (duration > 3) {
-        log_warning("[%s] writing may block mainloop: [%lums]", e->get_name(), duration);
+        log_warning("[%s] writing may block mainloop: [%lums]", e->name(), duration);
     }
     /*
      * If endpoint would block, add EPOLLOUT event to get notified when it's
@@ -138,12 +138,12 @@ int Mainloop::write_msg(Endpoint *e, const struct buffer *buf)
 }
 
 void Mainloop::route_msg(struct buffer *buf, int target_sysid, int target_compid, int sender_sysid,
-                         int sender_compid)
+                         int sender_compid, Endpoint* src_endpoint)
 {
     bool unknown = true;
 
     for (Endpoint **e = g_endpoints; *e != nullptr; e++) {
-        if ((*e)->accept_msg(target_sysid, target_compid, sender_sysid, sender_compid)) {
+        if ((*e)->accept_msg(target_sysid, target_compid, sender_sysid, sender_compid, src_endpoint)) {
             log_debug("Endpoint [%d] accepted message to %d/%d from %u/%u", (*e)->fd, target_sysid,
                       target_compid, sender_sysid, sender_compid);
             write_msg(*e, buf);
@@ -152,22 +152,13 @@ void Mainloop::route_msg(struct buffer *buf, int target_sysid, int target_compid
     }
 
     for (struct endpoint_entry *e = g_tcp_endpoints; e; e = e->next) {
-        if (e->endpoint->accept_msg(target_sysid, target_compid, sender_sysid, sender_compid)) {
+        if (e->endpoint->accept_msg(target_sysid, target_compid, sender_sysid, sender_compid, src_endpoint)) {
             log_debug("Endpoint [%d] accepted message to %d/%d from %u/%u", e->endpoint->fd,
                       target_sysid, target_compid, sender_sysid, sender_compid);
             int r = write_msg(e->endpoint, buf);
             if (r == -EPIPE) {
                 should_process_tcp_hangups = true;
             }
-            unknown = false;
-        }
-    }
-
-    for (struct udp_endpoint_entry *e = g_udp_endpoints; e; e = e->next) {
-        if (e->endpoint->accept_msg(target_sysid, target_compid, sender_sysid, sender_compid)) {
-            log_debug("Endpoint [%d] accepted message to %d/%d from %u/%u", e->endpoint->fd,
-                      target_sysid, target_compid, sender_sysid, sender_compid);
-            write_msg(e->endpoint, buf);
             unknown = false;
         }
     }
@@ -239,7 +230,7 @@ int Mainloop::_add_tcp_endpoint(TcpEndpoint *tcp)
 
 void Mainloop::handle_tcp_connection()
 {
-    TcpEndpoint *tcp = new TcpEndpoint{};
+    TcpEndpoint *tcp = new TcpEndpoint{"TCP"};
     int fd;
     int errno_copy;
 
@@ -260,45 +251,6 @@ add_error:
 accept_error:
     log_error("Could not accept TCP connection (%m)");
     delete tcp;
-}
-
-bool Mainloop::add_udp_endpoint(UdpEndpoint *udp)
-{
-    struct udp_endpoint_entry *udp_entry;
-
-    udp_entry = (struct udp_endpoint_entry *)calloc(1, sizeof(struct udp_endpoint_entry));
-    if (!udp_entry)
-        return false;
-
-    udp_entry->next = g_udp_endpoints;
-    udp_entry->endpoint = udp;
-    g_udp_endpoints = udp_entry;
-
-    add_fd(udp->fd, udp, EPOLLIN);
-
-    return true;
-}
-
-bool Mainloop::remove_udp_endpoint(const char *ip, unsigned long port)
-{
-    for (auto *t = g_udp_endpoints; t; t = t->next) {
-        if (!strcmp(t->endpoint->_ip, ip) && (t->endpoint->_port == port)) {
-            remove_fd(t->endpoint->fd);
-            t->endpoint->close();
-            if (t->next != nullptr) {
-                auto *r = t->next;
-                delete t->endpoint;
-                t->endpoint = t->next->endpoint;
-                t->next = t->next->next;
-                free(r);
-            } else {
-                delete t->endpoint;
-                free(t);
-                g_udp_endpoints = nullptr;
-            }
-        }
-    }
-    return true;
 }
 
 void Mainloop::loop()
@@ -381,10 +333,6 @@ bool Mainloop::_log_aggregate_timeout(void *data)
     for (auto *t = g_tcp_endpoints; t; t = t->next) {
         t->endpoint->log_aggregate(LOG_AGGREGATE_INTERVAL_SEC);
     }
-
-    for (auto *t = g_udp_endpoints; t; t = t->next) {
-        t->endpoint->log_aggregate(LOG_AGGREGATE_INTERVAL_SEC);
-    }
     return true;
 }
 
@@ -394,9 +342,6 @@ void Mainloop::print_statistics()
         (*e)->print_statistics();
 
     for (auto *t = g_tcp_endpoints; t; t = t->next)
-        t->endpoint->print_statistics();
-
-    for (auto *t = g_udp_endpoints; t; t = t->next)
         t->endpoint->print_statistics();
 }
 
@@ -429,7 +374,7 @@ bool Mainloop::add_endpoints(Mainloop &mainloop, struct options *opt)
     for (conf = opt->endpoints; conf; conf = conf->next) {
         switch (conf->type) {
         case Uart: {
-            std::unique_ptr<UartEndpoint> uart{new UartEndpoint{}};
+            std::unique_ptr<UartEndpoint> uart{new UartEndpoint{conf->name}};
             if (uart->open(conf->device) < 0)
                 return false;
 
@@ -452,7 +397,7 @@ bool Mainloop::add_endpoints(Mainloop &mainloop, struct options *opt)
             break;
         }
         case Udp: {
-            std::unique_ptr<UdpEndpoint> udp{new UdpEndpoint{}};
+            std::unique_ptr<UdpEndpoint> udp{new UdpEndpoint{conf->name}};
             if (udp->open(conf->address, conf->port, conf->eavesdropping) < 0) {
                 log_error("Could not open %s:%ld", conf->address, conf->port);
                 return false;
@@ -464,7 +409,7 @@ bool Mainloop::add_endpoints(Mainloop &mainloop, struct options *opt)
             break;
         }
         case Tcp: {
-            std::unique_ptr<TcpEndpoint> tcp{new TcpEndpoint{}};
+            std::unique_ptr<TcpEndpoint> tcp{new TcpEndpoint{conf->name}};
             tcp->retry_timeout = conf->retry_timeout;
             if (tcp->open(conf->address, conf->port) < 0) {
                 log_error("Could not open %s:%ld.", conf->address, conf->port);
@@ -482,7 +427,7 @@ bool Mainloop::add_endpoints(Mainloop &mainloop, struct options *opt)
             break;
         }
         case Local: {
-            std::unique_ptr<LocalEndpoint> local{new LocalEndpoint{}};
+            std::unique_ptr<LocalEndpoint> local{new LocalEndpoint{conf->name}};
             if (local->open(conf->sockname, conf->binding) < 0) {
                 log_error("Could not open %s", conf->sockname);
                 return false;
@@ -514,7 +459,7 @@ bool Mainloop::add_endpoints(Mainloop &mainloop, struct options *opt)
     }
 
     if (opt->report_msg_statistics)
-        add_timeout(MSEC_PER_SEC * 10, _print_statistics_timeout_cb, this);
+        add_timeout(MSEC_PER_SEC, _print_statistics_timeout_cb, this);
 
     return true;
 }
