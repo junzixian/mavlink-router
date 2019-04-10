@@ -49,6 +49,8 @@ static const char *__getProgramName () {
         return __progname;
 }
 #define GET_PROGRAM_NAME() __getProgramName()
+#define PACKAGE "mavlink-router"
+#define VERSION "1.0"
 #elif  (defined(__GNU_LIBRARY__) || defined(__GLIBC__)) && !defined(__UCLIBC__)
 #define GET_PROGRAM_NAME() program_invocation_short_name
 #else
@@ -76,10 +78,11 @@ static const struct option long_options[] = {
     { "log",                    required_argument,  NULL,   'l' },
     { "debug-log-level",        required_argument,  NULL,   'g' },
     { "verbose",                no_argument,        NULL,   'v' },
+    { "version",                no_argument,        NULL,   'V' },
     { }
 };
 
-static const char* short_options = "he:rt:c:d:l:p:g:v";
+static const char* short_options = "he:rt:c:d:l:p:g:vV";
 
 static void help(FILE *fp) {
     fprintf(fp,
@@ -102,7 +105,8 @@ static void help(FILE *fp) {
             "  -l --log <directory>         Enable Flight Stack logging\n"
             "  -g --debug-log-level <level> Set debug log level. Levels are\n"
             "                               <error|warning|info|debug>\n"
-            "  -v --verbose                 Verbose. Same as --debug-log-level=debug"
+            "  -v --verbose                 Verbose. Same as --debug-log-level=debug\n"
+            "  -V --version                 Show version\n"
             "  -h --help                    Print this message\n"
             , GET_PROGRAM_NAME());
 }
@@ -399,7 +403,7 @@ fail:
     return ret;
 }
 
-static void pre_parse_argv(int argc, char *argv[])
+static bool pre_parse_argv(int argc, char *argv[])
 {
     // This function parses only conf-file and conf-dir from
     // command line, so we can read the conf files.
@@ -418,11 +422,16 @@ static void pre_parse_argv(int argc, char *argv[])
             opt.conf_dir = optarg;
             break;
         }
+        case 'V':
+            puts(PACKAGE " version " VERSION);
+            return false;
         }
     }
 
     // Reset getopt*
     optind = 1;
+
+    return true;
 }
 
 static int parse_argv(int argc, char *argv[])
@@ -504,6 +513,7 @@ static int parse_argv(int argc, char *argv[])
         }
         case 'c':
         case 'd':
+        case 'V':
             break; // These options were parsed on pre_parse_argv
         case '?':
         default:
@@ -870,7 +880,10 @@ int main(int argc, char *argv[])
 
     Log::open();
 
-    pre_parse_argv(argc, argv);
+    if (!pre_parse_argv(argc, argv)) {
+        Log::close();
+        return 0;
+    }
 
     if (parse_conf_files() < 0)
         goto close_log;
