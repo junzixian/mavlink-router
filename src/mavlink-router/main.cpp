@@ -40,15 +40,17 @@
 #define DEFAULT_RETRY_TCP_TIMEOUT 5
 
 static struct options opt = {
-        .endpoints = nullptr,
-        .conf_file_name = nullptr,
-        .conf_dir = nullptr,
-        .tcp_port = ULONG_MAX,
-        .report_msg_statistics = false,
-        .logs_dir = nullptr,
-        .log_mode = LogMode::always,
-        .debug_log_level = (int)Log::Level::INFO,
-        .mavlink_dialect = Auto
+    .endpoints = nullptr,
+    .conf_file_name = nullptr,
+    .conf_dir = nullptr,
+    .tcp_port = ULONG_MAX,
+    .report_msg_statistics = false,
+    .logs_dir = nullptr,
+    .log_mode = LogMode::always,
+    .debug_log_level = (int)Log::Level::INFO,
+    .mavlink_dialect = Auto,
+    .min_free_space = 0,
+    .max_log_files = 0,
 };
 
 static const struct option long_options[] = {
@@ -205,7 +207,7 @@ fail:
 }
 
 static int add_endpoint_address(const char *name, size_t name_len, const char *ip,
-                                long unsigned port, bool eavesdropping)
+                                long unsigned port, bool eavesdropping, const char *filter)
 {
     int ret;
 
@@ -235,6 +237,14 @@ static int add_endpoint_address(const char *name, size_t name_len, const char *i
     if (!conf->address) {
         ret = -EINVAL;
         goto fail;
+    }
+    
+    if (filter) {
+        conf->filter = strdup(filter);
+        if (!conf->filter) {
+            ret = -ENOMEM;
+            goto fail;
+        }
     }
 
     if (port != ULONG_MAX) {
@@ -402,7 +412,7 @@ static int parse_argv(int argc, char *argv[])
                 return -EINVAL;
             }
 
-            add_endpoint_address(NULL, 0, ip, port, false);
+            add_endpoint_address(NULL, 0, ip, port, false, NULL);
             free(ip);
             break;
         }
@@ -488,7 +498,7 @@ static int parse_argv(int argc, char *argv[])
                 return -EINVAL;
             }
 
-            add_endpoint_address(NULL, 0, base, number, true);
+            add_endpoint_address(NULL, 0, base, number, true, NULL);
         } else {
             const char *bauds = number != ULONG_MAX ? base + strlen(base) + 1 : NULL;
             int ret = add_uart_endpoint(NULL, 0, base, bauds, false);
@@ -644,12 +654,19 @@ static int parse_confs(ConfFile &conf)
     const char *pattern;
 
     static const ConfFile::OptionsTable option_table[] = {
-        {"TcpServerPort",   false, ConfFile::parse_ul,      OPTIONS_TABLE_STRUCT_FIELD(options, tcp_port)},
-        {"ReportStats",     false, ConfFile::parse_bool,    OPTIONS_TABLE_STRUCT_FIELD(options, report_msg_statistics)},
-        {"MavlinkDialect",  false, parse_mavlink_dialect,   OPTIONS_TABLE_STRUCT_FIELD(options, mavlink_dialect)},
-        {"Log",             false, ConfFile::parse_str_dup, OPTIONS_TABLE_STRUCT_FIELD(options, logs_dir)},
-        {"LogMode",         false, parse_log_mode,          OPTIONS_TABLE_STRUCT_FIELD(options, log_mode)},
-        {"DebugLogLevel",   false, parse_log_level,         OPTIONS_TABLE_STRUCT_FIELD(options, debug_log_level)},
+        {"TcpServerPort", false, ConfFile::parse_ul, OPTIONS_TABLE_STRUCT_FIELD(options, tcp_port)},
+        {"ReportStats", false, ConfFile::parse_bool,
+         OPTIONS_TABLE_STRUCT_FIELD(options, report_msg_statistics)},
+        {"MavlinkDialect", false, parse_mavlink_dialect,
+         OPTIONS_TABLE_STRUCT_FIELD(options, mavlink_dialect)},
+        {"Log", false, ConfFile::parse_str_dup, OPTIONS_TABLE_STRUCT_FIELD(options, logs_dir)},
+        {"LogMode", false, parse_log_mode, OPTIONS_TABLE_STRUCT_FIELD(options, log_mode)},
+        {"DebugLogLevel", false, parse_log_level,
+         OPTIONS_TABLE_STRUCT_FIELD(options, debug_log_level)},
+        {"MinFreeSpace", false, ConfFile::parse_ul,
+         OPTIONS_TABLE_STRUCT_FIELD(options, min_free_space)},
+        {"MaxLogFiles", false, ConfFile::parse_ul,
+         OPTIONS_TABLE_STRUCT_FIELD(options, max_log_files)},
     };
 
     struct option_uart {
@@ -667,11 +684,13 @@ static int parse_confs(ConfFile &conf)
         char *addr;
         bool eavesdropping;
         unsigned long port;
+        char *filter;
     };
     static const ConfFile::OptionsTable option_table_udp[] = {
         {"address", true,   ConfFile::parse_str_dup,    OPTIONS_TABLE_STRUCT_FIELD(option_udp, addr)},
         {"mode",    true,   parse_mode,                 OPTIONS_TABLE_STRUCT_FIELD(option_udp, eavesdropping)},
         {"port",    false,  ConfFile::parse_ul,         OPTIONS_TABLE_STRUCT_FIELD(option_udp, port)},
+        {"filter",  false,  ConfFile::parse_str_dup,    OPTIONS_TABLE_STRUCT_FIELD(option_udp, filter)},
     };
 
     struct option_tcp {
@@ -717,7 +736,7 @@ static int parse_confs(ConfFile &conf)
                 ret = -EINVAL;
             } else {
                 ret = add_endpoint_address(iter.name + offset, iter.name_len - offset, opt_udp.addr,
-                                           opt_udp.port, opt_udp.eavesdropping);
+                                           opt_udp.port, opt_udp.eavesdropping, opt_udp.filter);
             }
         }
 

@@ -17,7 +17,7 @@
  */
 #pragma once
 
-#include <mavlink.h>
+#include <common/mavlink.h>
 
 #include <memory>
 #include <vector>
@@ -75,7 +75,7 @@ public:
         ReadUnkownMsg,
     };
 
-    Endpoint(const char *name, bool crc_check_enabled);
+    Endpoint(const char *name);
     virtual ~Endpoint();
 
     int handle_read() override;
@@ -96,14 +96,16 @@ public:
         return has_sys_comp_id(sys_comp_id);
     }
 
-    bool accept_msg(int target_sysid, int target_compid, uint8_t src_sysid, uint8_t src_compid);
+    bool accept_msg(int target_sysid, int target_compid, uint8_t src_sysid, uint8_t src_compid, uint32_t msg_id);
+
+    void add_message_to_filter(uint32_t msg_id) { _message_filter.push_back(msg_id); }
 
     struct buffer rx_buf;
     struct buffer tx_buf;
 
 protected:
     virtual int read_msg(struct buffer *pbuf, int *target_system, int *target_compid,
-                         uint8_t *src_sysid, uint8_t *src_compid);
+                         uint8_t *src_sysid, uint8_t *src_compid, uint32_t *msg_id);
     virtual ssize_t _read_msg(uint8_t *buf, size_t len) = 0;
     bool _check_crc(const mavlink_msg_entry_t *msg_entry);
     void _add_sys_comp_id(uint16_t sys_comp_id);
@@ -128,14 +130,19 @@ protected:
         } write;
     } _stat;
 
-    const bool _crc_check_enabled;
     uint32_t _incomplete_msgs = 0;
     std::vector<uint16_t> _sys_comp_ids;
+
+private:
+    std::vector<uint32_t> _message_filter;
 };
 
 class UartEndpoint : public Endpoint {
 public:
-    UartEndpoint() : Endpoint{"UART", true} { }
+    UartEndpoint()
+        : Endpoint {"UART"}
+    {
+    }
     virtual ~UartEndpoint();
     int write_msg(const struct buffer *pbuf) override;
     int flush_pending_msgs() override { return -ENOSYS; }
@@ -147,7 +154,7 @@ public:
 
 protected:
     int read_msg(struct buffer *pbuf, int *target_system, int *target_compid, uint8_t *src_sysid,
-                 uint8_t *src_compid) override;
+                 uint8_t *src_compid, uint32_t *msg_id) override;
     ssize_t _read_msg(uint8_t *buf, size_t len) override;
 
 private:

@@ -36,7 +36,7 @@ public:
     int remove_fd(int fd);
     void loop();
     void route_msg(struct buffer *buf, int target_sysid, int target_compid, int sender_sysid,
-                   int sender_compid);
+                   int sender_compid, uint32_t msg_id = UINT32_MAX);
     void handle_read(Endpoint *e);
     void handle_canwrite(Endpoint *e);
     void handle_tcp_connection();
@@ -67,6 +67,11 @@ public:
      * Initialize and return singleton.
      */
     static Mainloop &init();
+
+    /*
+     * Request that loop exits "eventually".
+     */
+    static void request_exit();
 
 private:
     static const unsigned int LOG_AGGREGATE_INTERVAL_SEC = 5;
@@ -117,6 +122,7 @@ struct endpoint_config {
             bool flowcontrol;
         };
     };
+    char *filter;
 };
 
 struct options {
@@ -129,4 +135,6 @@ struct options {
     LogMode log_mode;
     int debug_log_level;
     enum mavlink_dialect mavlink_dialect;
+    unsigned long min_free_space;
+    unsigned long max_log_files;
 };

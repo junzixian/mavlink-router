@@ -23,6 +23,7 @@
 #include <sys/timerfd.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <memory>
 
 #include <common/log.h>
@@ -30,14 +31,14 @@
 
 #include "autolog.h"
 
-static volatile bool should_exit = false;
+static std::atomic<bool> should_exit {false};
 
 Mainloop Mainloop::_instance{};
 bool Mainloop::_initialized = false;
 
 static void exit_signal_handler(int signum)
 {
-    should_exit = true;
+    Mainloop::request_exit();
 }
 
 static void setup_signal_handlers()
@@ -60,6 +61,11 @@ Mainloop &Mainloop::init()
     _initialized = true;
 
     return _instance;
+}
+
+void Mainloop::request_exit()
+{
+    should_exit.store(true, std::memory_order_relaxed);
 }
 
 int Mainloop::open()
@@ -132,12 +138,12 @@ int Mainloop::write_msg(Endpoint *e, const struct buffer *buf)
 }
 
 void Mainloop::route_msg(struct buffer *buf, int target_sysid, int target_compid, int sender_sysid,
-                         int sender_compid)
+                         int sender_compid, uint32_t msg_id)
 {
     bool unknown = true;
 
     for (Endpoint **e = g_endpoints; *e != nullptr; e++) {
-        if ((*e)->accept_msg(target_sysid, target_compid, sender_sysid, sender_compid)) {
+        if ((*e)->accept_msg(target_sysid, target_compid, sender_sysid, sender_compid, msg_id)) {
             log_debug("Endpoint [%d] accepted message to %d/%d from %u/%u", (*e)->fd, target_sysid,
                       target_compid, sender_sysid, sender_compid);
             write_msg(*e, buf);
@@ -146,7 +152,7 @@ void Mainloop::route_msg(struct buffer *buf, int target_sysid, int target_compid
     }
 
     for (struct endpoint_entry *e = g_tcp_endpoints; e; e = e->next) {
-        if (e->endpoint->accept_msg(target_sysid, target_compid, sender_sysid, sender_compid)) {
+        if (e->endpoint->accept_msg(target_sysid, target_compid, sender_sysid, sender_compid, msg_id)) {
             log_debug("Endpoint [%d] accepted message to %d/%d from %u/%u", e->endpoint->fd,
                       target_sysid, target_compid, sender_sysid, sender_compid);
             int r = write_msg(e->endpoint, buf);
@@ -261,7 +267,7 @@ void Mainloop::loop()
     add_timeout(LOG_AGGREGATE_INTERVAL_SEC * MSEC_PER_SEC,
                 std::bind(&Mainloop::_log_aggregate_timeout, this, std::placeholders::_1), this);
 
-    while (!should_exit) {
+    while (!should_exit.load(std::memory_order_relaxed)) {
         int i;
 
         r = epoll_wait(epollfd, events, max_events, -1);
@@ -293,7 +299,7 @@ void Mainloop::loop()
                 remove_fd(p->fd);
                 // make poll errors fatal so that an external component can
                 // restart mavlink-router
-                should_exit = true;
+                request_exit();
             }
         }
 
@@ -324,8 +330,10 @@ bool Mainloop::_log_aggregate_timeout(void *data)
         _errors_aggregate.msg_to_unknown = 0;
     }
 
-    for (Endpoint **e = g_endpoints; *e != nullptr; e++) {
-        (*e)->log_aggregate(LOG_AGGREGATE_INTERVAL_SEC);
+    if (g_endpoints) {
+        for (Endpoint **e = g_endpoints; *e != nullptr; e++) {
+            (*e)->log_aggregate(LOG_AGGREGATE_INTERVAL_SEC);
+        }
     }
 
     for (auto *t = g_tcp_endpoints; t; t = t->next) {
@@ -401,6 +409,14 @@ bool Mainloop::add_endpoints(Mainloop &mainloop, struct options *opt)
                 return false;
             }
 
+            if (conf->filter) {
+                char *token = strtok(conf->filter, ",");
+                while (token != NULL) {
+                    udp->add_message_to_filter(atoi(token));
+                    token = strtok(NULL, ",");
+                } 
+            }
+
             g_endpoints[i] = udp.release();
             mainloop.add_fd(g_endpoints[i]->fd, g_endpoints[i], EPOLLIN);
             i++;
@@ -435,12 +451,16 @@ bool Mainloop::add_endpoints(Mainloop &mainloop, struct options *opt)
 
     if (opt->logs_dir) {
         if (opt->mavlink_dialect == Ardupilotmega) {
-            _log_endpoint = new BinLog(opt->logs_dir, opt->log_mode);
+            _log_endpoint
+                = new BinLog(opt->logs_dir, opt->log_mode, opt->min_free_space, opt->max_log_files);
         } else if (opt->mavlink_dialect == Common) {
-            _log_endpoint = new ULog(opt->logs_dir, opt->log_mode);
+            _log_endpoint
+                = new ULog(opt->logs_dir, opt->log_mode, opt->min_free_space, opt->max_log_files);
         } else {
-            _log_endpoint = new AutoLog(opt->logs_dir, opt->log_mode);
+            _log_endpoint = new AutoLog(opt->logs_dir, opt->log_mode, opt->min_free_space,
+                                        opt->max_log_files);
         }
+        _log_endpoint->mark_unfinished_logs();
         g_endpoints[i] = _log_endpoint;
     }
 
